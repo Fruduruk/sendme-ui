@@ -1,0 +1,55 @@
+[package]
+name = "sendme"
+version = "0.23.0"
+edition = "2021"
+keywords = ["scp", "sftp", "network", "p2p", "holepunching"]
+categories = ["network-programming"]
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/n0-computer/sendme"
+description = "A cli tool to send directories over the network, with NAT hole punching"
+readme = "README.md"
+
+# Sadly this also needs to be updated in .github/workflows/ci.yml
+rust-version = "1.81"
+
+[dependencies]
+egui = "0.29"
+eframe = { version = "0.29", default-features = false, features = [
+    "default_fonts", # Embed the default egui fonts.
+    "glow",          # Use the glow rendering backend. Alternative: "wgpu".
+    "persistence",   # Enable restoring app state when restarting the app.
+] }
+anyhow = "1.0.75"
+async-channel = "2.3.1"
+clap = { version = "4.4.10", features = ["derive"] }
+console = "0.15.7"
+derive_more = { version = "1.0.0", features = [
+    "display",
+    "from_str"
+] }
+futures-buffered = "0.2.4"
+futures-lite = "2.3.0"
+indicatif = "0.17.7"
+iroh-blobs = { version = "0.32", features = ["net_protocol"] }
+iroh-io = "0.6"
+iroh = "0.32"
+num_cpus = "1.16.0"
+rand = "0.8.5"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1.34.0", features = ["full"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+walkdir = "2.4.0"
+data-encoding = "2.6.0"
+n0-future = "0.1.2"
+
+[dev-dependencies]
+duct = "0.13.6"
+nix = { version = "0.29", features = ["signal", "process"] }
+rand = "0.8.5"
+serde_json = "1.0.108"
+tempfile = "3.8.1"
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs.git", branch = "main" }
