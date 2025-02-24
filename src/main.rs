@@ -1,16 +1,7 @@
 //! Command line arguments.
 
-use std::{
-    collections::BTreeMap,
-    fmt::{Display, Formatter},
-    net::{SocketAddrV4, SocketAddrV6},
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
-use egui::Context as EguiContext;
-use std::sync::mpsc::{Receiver, Sender};
+mod tutorial;
+
 use anyhow::Context;
 use clap::{
     error::{ContextKind, ErrorKind},
@@ -18,6 +9,7 @@ use clap::{
 };
 use console::style;
 use data_encoding::HEXLOWER;
+use egui::Context as EguiContext;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
@@ -42,6 +34,16 @@ use iroh_blobs::{
 use n0_future::{future::Boxed, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::{Receiver, Sender};
+use std::{
+    collections::BTreeMap,
+    fmt::{Display, Formatter},
+    net::{SocketAddrV4, SocketAddrV6},
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -864,54 +866,39 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let result = eframe::run_native(
-        "Sendme View",
-        eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([400.0, 300.0])
-                .with_min_inner_size([300.0, 220.0]),
-            ..Default::default()
-        },
-        Box::new(|_| {
-            Ok(Box::new(View{}))
-        }),
-    );
-
     tracing_subscriber::fmt::init();
-    let args = match Args::try_parse() {
-        Ok(args) => args,
-        Err(cause) => {
-            if let Some(text) = cause.get(ContextKind::InvalidSubcommand) {
-                eprintln!("{} \"{}\"\n", ErrorKind::InvalidSubcommand, text);
-                eprintln!("Available subcommands are");
-                for cmd in Args::command().get_subcommands() {
-                    eprintln!("    {}", style(cmd.get_name()).bold());
-                }
-                std::process::exit(1);
-            } else {
-                cause.exit();
-            }
+    if let Ok(args) = Args::try_parse() {
+        let res = match args.command {
+            Commands::Send(args) => send(args).await,
+            Commands::Receive(args) => receive(args).await,
+        };
+        if let Err(e) = &res {
+            eprintln!("{e}");
         }
-    };
-    let res = match args.command {
-        Commands::Send(args) => send(args).await,
-        Commands::Receive(args) => receive(args).await,
-    };
-    if let Err(e) = &res {
-        eprintln!("{e}");
-    }
-    match res {
-        Ok(()) => std::process::exit(0),
-        Err(_) => std::process::exit(1),
+        match res {
+            Ok(()) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
+    } else {
+        let res = eframe::run_native(
+            "Sendme View",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size([400.0, 300.0])
+                    .with_min_inner_size([300.0, 220.0]),
+                ..Default::default()
+            },
+            Box::new(|_| Ok(Box::new(View {}))),
+        );
+        match res {
+            Ok(()) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
     }
 }
 
-pub struct View {
-    
-}
+pub struct View {}
 
 impl eframe::App for View {
-    fn update(&mut self, ctx: &EguiContext, _frame: &mut eframe::Frame) {
-
-    }
+    fn update(&mut self, ctx: &EguiContext, _frame: &mut eframe::Frame) {}
 }
