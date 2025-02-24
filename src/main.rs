@@ -1,7 +1,7 @@
 //! Command line arguments.
+mod view;
 
-mod tutorial;
-
+use crate::view::View;
 use anyhow::Context;
 use clap::{
     error::{ContextKind, ErrorKind},
@@ -9,7 +9,6 @@ use clap::{
 };
 use console::style;
 use data_encoding::HEXLOWER;
-use egui::Context as EguiContext;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
@@ -34,7 +33,6 @@ use iroh_blobs::{
 use n0_future::{future::Boxed, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{Receiver, Sender};
 use std::{
     collections::BTreeMap,
     fmt::{Display, Formatter},
@@ -827,24 +825,13 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         HumanBytes(payload_size)
     );
     // print the details of the collection only in verbose mode
-    if args.common.verbose > 0 {
-        eprintln!(
-            "getting {} blobs in total, {}",
-            sizes.len(),
-            HumanBytes(total_size)
-        );
-    }
     let _task = tokio::spawn(show_download_progress(recv, total_size));
     let get_conn = || async move { Ok(connection) };
     let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
         .await
         .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
     let collection = Collection::load_db(&db, &hash_and_format.hash).await?;
-    if args.common.verbose > 0 {
-        for (name, hash) in collection.iter() {
-            println!("    {} {name}", print_hash(hash, args.common.format));
-        }
-    }
+    
     if let Some((name, _)) = collection.iter().next() {
         if let Some(first) = name.split('/').next() {
             println!("downloading to: {};", first);
@@ -852,15 +839,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     }
     export(db, collection).await?;
     tokio::fs::remove_dir_all(iroh_data_dir).await?;
-    if args.common.verbose > 0 {
-        println!(
-            "downloaded {} files, {}. took {} ({}/s)",
-            total_files,
-            HumanBytes(payload_size),
-            HumanDuration(stats.elapsed),
-            HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64),
-        );
-    }
+    
     Ok(())
 }
 
@@ -888,7 +867,14 @@ async fn main() -> anyhow::Result<()> {
                     .with_min_inner_size([300.0, 220.0]),
                 ..Default::default()
             },
-            Box::new(|_| Ok(Box::new(View {}))),
+            Box::new(|_| {
+                Ok(Box::new(View {
+                    path: String::new(),
+                    ticket: String::new(),
+                    sending_handle: None,
+                    receiving_handle: None,
+                }))
+            }),
         );
         match res {
             Ok(()) => std::process::exit(0),
@@ -896,9 +882,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 }
-
-pub struct View {}
-
-impl eframe::App for View {
-    fn update(&mut self, ctx: &EguiContext, _frame: &mut eframe::Frame) {}
-}
+// fn assert_send<T: Send>(_: &T) {}
+// 
+// async fn check_receive_send(args: ReceiveArgs) {
+//     let future = receive(args);
+//     assert_send(&future);
+// }
+// 
