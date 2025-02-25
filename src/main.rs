@@ -42,6 +42,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -843,49 +844,28 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    if let Ok(args) = Args::try_parse() {
-        let res = match args.command {
-            Commands::Send(args) => send(args).await,
-            Commands::Receive(args) => receive(args).await,
-        };
-        if let Err(e) = &res {
-            eprintln!("{e}");
-        }
-        match res {
-            Ok(()) => std::process::exit(0),
-            Err(_) => std::process::exit(1),
-        }
-    } else {
-        let res = eframe::run_native(
-            "Sendme View",
-            eframe::NativeOptions {
-                viewport: egui::ViewportBuilder::default()
-                    .with_inner_size([400.0, 300.0])
-                    .with_min_inner_size([300.0, 220.0]),
-                ..Default::default()
-            },
-            Box::new(|_| {
-                Ok(Box::new(View {
-                    path: String::new(),
-                    ticket: String::new(),
-                    sending_handle: None,
-                    receiving_handle: None,
-                }))
-            }),
-        );
-        match res {
-            Ok(()) => std::process::exit(0),
-            Err(_) => std::process::exit(1),
-        }
+    let res = eframe::run_native(
+        "Send Me View",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([400.0, 300.0])
+                .with_min_inner_size([300.0, 220.0]),
+            ..Default::default()
+        },
+        Box::new(|_| {
+            Ok(Box::new(View {
+                path: String::new(),
+                ticket: String::new(),
+                sending_handle: None,
+                receiving_handle: None,
+                tokio_runtime: Runtime::new().unwrap()
+            }))
+        }),
+    );
+    match res {
+        Ok(()) => std::process::exit(0),
+        Err(_) => std::process::exit(1),
     }
 }
-// fn assert_send<T: Send>(_: &T) {}
-// 
-// async fn check_receive_send(args: ReceiveArgs) {
-//     let future = receive(args);
-//     assert_send(&future);
-// }
-// 

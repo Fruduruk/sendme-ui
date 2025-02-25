@@ -1,6 +1,7 @@
 use crate::{receive, send, ReceiveArgs, SendArgs};
 use clap::Parser;
 use egui::{Context, Ui};
+use tokio::runtime::Runtime;
 use tokio::task::Id;
 use tokio::task::JoinHandle;
 
@@ -9,6 +10,7 @@ pub struct View {
     pub ticket: String,
     pub sending_handle: Option<JoinHandle<anyhow::Result<()>>>,
     pub receiving_handle: Option<JoinHandle<()>>,
+    pub tokio_runtime: Runtime
 }
 
 impl eframe::App for View {
@@ -43,7 +45,7 @@ impl View {
 
             if ui.button("Send").clicked() {
                 let args = SendArgs::parse_from(vec!["send".into(), self.path.clone()]);
-                let task = tokio::spawn(async move { send(args).await });
+                let task = self.tokio_runtime.spawn(async move { send(args).await });
                 self.sending_handle = Some(task);
             }
         }
@@ -63,16 +65,12 @@ impl View {
             if ui.button("Receive").clicked() {
                 let args = ReceiveArgs::parse_from(vec!["receive".into(), self.ticket.clone()]);
 
-                let task = tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
+                let handle = self.tokio_runtime.handle().clone();
+                let task = self.tokio_runtime.spawn_blocking(move || {
+                    handle.block_on(async {
                         receive(args).await.unwrap();
                     })
                 });
-
-                // let task = tokio::spawn(async move {
-                //     receive(args).await
-                // });
 
                 self.receiving_handle = Some(task);
             }
