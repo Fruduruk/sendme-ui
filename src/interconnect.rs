@@ -6,11 +6,12 @@ use std::fmt::{Display, Formatter};
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::path::PathBuf;
 use std::str::FromStr;
+use iroh_blobs::get::db::DownloadProgress;
 
 pub enum ViewUpdate {
     Nothing,
     Ticket(BlobTicket),
-    Progress
+    Progress((u64,u64,DownloadProgress))
 }
 
 

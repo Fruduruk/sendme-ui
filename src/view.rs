@@ -1,14 +1,15 @@
-use std::ops::Deref;
 use crate::backend::{receive, send};
 use crate::interconnect::{AddrInfoOptions, CommonArgs, ReceiveArgs, SendArgs, ViewUpdate};
-use egui::{Context, Ui};
+use arboard::Clipboard;
+use egui::{Context, ProgressBar, Ui};
 use iroh_blobs::ticket::BlobTicket;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
+use iroh_blobs::get::db::DownloadProgress;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
-use arboard::Clipboard;
 
 enum Tab {
     Send,
@@ -26,12 +27,12 @@ pub struct View {
     receiver: Receiver<ViewUpdate>,
     sender: Sender<ViewUpdate>,
     cancel_sender: Sender<bool>,
-    cancel_receiver: Receiver<bool>
+    cancel_receiver: Receiver<bool>,
 }
 
 impl Default for View {
     fn default() -> Self {
-        let (sender,receiver) = channel(ViewUpdate::Nothing);
+        let (sender, receiver) = channel(ViewUpdate::Nothing);
         let (cancel_sender, cancel_receiver) = channel(false);
         View {
             init: true,
@@ -44,7 +45,7 @@ impl Default for View {
             sender,
             receiver,
             cancel_sender,
-            cancel_receiver
+            cancel_receiver,
         }
     }
 }
@@ -95,7 +96,13 @@ impl View {
             ViewUpdate::Ticket(ticket) => {
                 Self::show_ticket(ui, ticket);
             }
-            ViewUpdate::Progress => {}
+            ViewUpdate::Progress((total_done, total_size, progress)) => {
+                if let DownloadProgress::Progress { offset, .. } = progress {
+                    let progress = (*total_done as f32 + *offset as f32) / *total_size as f32;
+                    let bar = ProgressBar::new(progress);
+                    ui.add(bar);
+                }
+            }
         }
     }
 
@@ -134,7 +141,9 @@ impl View {
                 };
                 let sender = self.sender.clone();
                 let cancel_receiver = self.cancel_receiver.clone();
-                let task = self.tokio_runtime.spawn(async move { send(args, sender, cancel_receiver).await });
+                let task = self
+                    .tokio_runtime
+                    .spawn(async move { send(args, sender, cancel_receiver).await });
                 self.sending_handle = Some(task);
             }
         }
@@ -158,9 +167,10 @@ impl View {
                 };
 
                 let handle = self.tokio_runtime.handle().clone();
+                let sender = self.sender.clone();
                 let task = self.tokio_runtime.spawn_blocking(move || {
                     handle.block_on(async {
-                        receive(args).await.unwrap();
+                        receive(args, sender).await.unwrap();
                     })
                 });
 
