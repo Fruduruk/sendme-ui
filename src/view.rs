@@ -1,20 +1,37 @@
-use crate::{receive, send, ReceiveArgs, SendArgs};
+use crate::backend::{receive, send};
+use crate::interconnect::{
+    AddrInfoOptions, CommonArgs, Format, ReceiveArgs, RelayModeOption, SendArgs,
+};
 use clap::Parser;
 use egui::{Context, Ui};
+use iroh_blobs::ticket::BlobTicket;
+use std::path::PathBuf;
+use std::str::FromStr;
 use tokio::runtime::Runtime;
-use tokio::task::Id;
 use tokio::task::JoinHandle;
 
 pub struct View {
+    pub init: bool,
     pub path: String,
     pub ticket: String,
     pub sending_handle: Option<JoinHandle<anyhow::Result<()>>>,
     pub receiving_handle: Option<JoinHandle<()>>,
-    pub tokio_runtime: Runtime
+    pub tokio_runtime: Runtime,
+}
+
+impl View {
+    fn init(&mut self, ctx: &Context) {
+        ctx.set_pixels_per_point(2.0);
+        self.init = false;
+    }
 }
 
 impl eframe::App for View {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        if self.init {
+            self.init(ctx);
+        }
+
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::widgets::global_theme_preference_buttons(ui);
         });
@@ -44,7 +61,11 @@ impl View {
             self.path = clean_path.into();
 
             if ui.button("Send").clicked() {
-                let args = SendArgs::parse_from(vec!["send".into(), self.path.clone()]);
+                let args = SendArgs {
+                    path: PathBuf::from(self.path.clone()),
+                    common: CommonArgs::default(),
+                    ticket_type: AddrInfoOptions::default(),
+                };
                 let task = self.tokio_runtime.spawn(async move { send(args).await });
                 self.sending_handle = Some(task);
             }
@@ -63,7 +84,10 @@ impl View {
                 .show(ui);
 
             if ui.button("Receive").clicked() {
-                let args = ReceiveArgs::parse_from(vec!["receive".into(), self.ticket.clone()]);
+                let args = ReceiveArgs {
+                    common: CommonArgs::default(),
+                    ticket: BlobTicket::from_str(&self.ticket).unwrap(),
+                };
 
                 let handle = self.tokio_runtime.handle().clone();
                 let task = self.tokio_runtime.spawn_blocking(move || {
