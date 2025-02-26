@@ -1,28 +1,51 @@
+use std::ops::Deref;
 use crate::backend::{receive, send};
-use crate::interconnect::{
-    AddrInfoOptions, CommonArgs, Format, ReceiveArgs, RelayModeOption, SendArgs,
-};
-use clap::Parser;
+use crate::interconnect::{AddrInfoOptions, CommonArgs, ReceiveArgs, SendArgs, ViewUpdate};
 use egui::{Context, Ui};
 use iroh_blobs::ticket::BlobTicket;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::runtime::Runtime;
+use tokio::sync::watch::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
+use arboard::Clipboard;
 
-pub struct View {
-    pub init: bool,
-    pub path: String,
-    pub ticket: String,
-    pub sending_handle: Option<JoinHandle<anyhow::Result<()>>>,
-    pub receiving_handle: Option<JoinHandle<()>>,
-    pub tokio_runtime: Runtime,
+enum Tab {
+    Send,
+    Receive,
 }
 
-impl View {
-    fn init(&mut self, ctx: &Context) {
-        ctx.set_pixels_per_point(2.0);
-        self.init = false;
+pub struct View {
+    init: bool,
+    tab: Tab,
+    path: String,
+    ticket: String,
+    sending_handle: Option<JoinHandle<anyhow::Result<()>>>,
+    receiving_handle: Option<JoinHandle<()>>,
+    tokio_runtime: Runtime,
+    receiver: Receiver<ViewUpdate>,
+    sender: Sender<ViewUpdate>,
+    cancel_sender: Sender<bool>,
+    cancel_receiver: Receiver<bool>
+}
+
+impl Default for View {
+    fn default() -> Self {
+        let (sender,receiver) = channel(ViewUpdate::Nothing);
+        let (cancel_sender, cancel_receiver) = channel(false);
+        View {
+            init: true,
+            tab: Tab::Send,
+            path: String::new(),
+            ticket: String::new(),
+            sending_handle: None,
+            receiving_handle: None,
+            tokio_runtime: Runtime::new().unwrap(),
+            sender,
+            receiver,
+            cancel_sender,
+            cancel_receiver
+        }
     }
 }
 
@@ -35,22 +58,64 @@ impl eframe::App for View {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::widgets::global_theme_preference_buttons(ui);
         });
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.show_send_ui(ui);
-            self.show_receive_ui(ui);
+            if self.sending_handle.is_none() && self.receiving_handle.is_none() {
+                ui.horizontal(|ui| {
+                    if ui.button("Send Page").clicked() {
+                        self.tab = Tab::Send;
+                    }
+                    if ui.button("Receive Page").clicked() {
+                        self.tab = Tab::Receive;
+                    }
+                });
+            }
+            match self.tab {
+                Tab::Send => {
+                    self.show_send_ui(ui);
+                }
+                Tab::Receive => {
+                    self.show_receive_ui(ui);
+                }
+            }
+            self.show_results(ui);
         });
     }
 }
 
 impl View {
+    fn init(&mut self, ctx: &Context) {
+        ctx.set_pixels_per_point(2.0);
+        self.init = false;
+    }
+
+    fn show_results(&mut self, ui: &mut Ui) {
+        match self.receiver.borrow().deref() {
+            ViewUpdate::Nothing => {}
+            ViewUpdate::Ticket(ticket) => {
+                Self::show_ticket(ui, ticket);
+            }
+            ViewUpdate::Progress => {}
+        }
+    }
+
+    fn show_ticket(ui: &mut Ui, ticket: &BlobTicket) {
+        ui.label(format!("Generated ticket: {}", ticket));
+        if ui.button("Copy to clipboard").clicked() {
+            let mut clipboard = Clipboard::new().unwrap();
+            clipboard.clear().unwrap();
+            clipboard.set_text(ticket.to_string()).unwrap();
+        }
+    }
+
     fn show_send_ui(&mut self, ui: &mut Ui) {
         if let Some(handle) = &self.sending_handle {
             if handle.is_finished() {
                 self.sending_handle = None;
             } else {
-                // if ui.button("Cancel").clicked() {
-                //
-                // }
+                if ui.button("Cancel").clicked() {
+                    self.cancel_sender.send(true).unwrap();
+                }
             }
         } else {
             ui.label("Insert path to your file or directory");
@@ -61,12 +126,15 @@ impl View {
             self.path = clean_path.into();
 
             if ui.button("Send").clicked() {
+                self.cancel_sender.send(false).unwrap();
                 let args = SendArgs {
                     path: PathBuf::from(self.path.clone()),
                     common: CommonArgs::default(),
                     ticket_type: AddrInfoOptions::default(),
                 };
-                let task = self.tokio_runtime.spawn(async move { send(args).await });
+                let sender = self.sender.clone();
+                let cancel_receiver = self.cancel_receiver.clone();
+                let task = self.tokio_runtime.spawn(async move { send(args, sender, cancel_receiver).await });
                 self.sending_handle = Some(task);
             }
         }

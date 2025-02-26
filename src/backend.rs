@@ -1,3 +1,6 @@
+use crate::interconnect::{
+    apply_options, print_hash, AddrInfoOptions, ReceiveArgs, SendArgs, ViewUpdate,
+};
 use anyhow::Context;
 use clap::{
     error::{ContextKind, ErrorKind},
@@ -38,9 +41,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use std::ops::Deref;
 use tokio::runtime::Runtime;
+use tokio::sync::watch::{Receiver, Sender};
 use walkdir::WalkDir;
-use crate::interconnect::{apply_options, print_hash, AddrInfoOptions, ReceiveArgs, SendArgs};
 
 /// Get the secret key or generate a new one.
 ///
@@ -271,99 +275,103 @@ async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> an
             ExportMode::TryReference,
             Box::new(move |_position| Ok(())),
         )
-            .await?;
+        .await?;
     }
     Ok(())
 }
 
-// #[derive(Debug, Clone)]
-// struct SendStatus {
-//     /// the multiprogress bar
-//     mp: MultiProgress,
-// }
-//
-// impl SendStatus {
-//     fn new() -> Self {
-//         let mp = MultiProgress::new();
-//         mp.set_draw_target(ProgressDrawTarget::stderr());
-//         Self { mp }
-//     }
-//
-//     fn new_client(&self) -> ClientStatus {
-//         let current = self.mp.add(ProgressBar::hidden());
-//         current.set_style(
-//             ProgressStyle::default_spinner()
-//                 .template("{spinner:.green} [{elapsed_precise}] {msg}")
-//                 .unwrap(),
-//         );
-//         current.enable_steady_tick(Duration::from_millis(100));
-//         current.set_message("waiting for requests");
-//         ClientStatus {
-//             current: current.into(),
-//         }
-//     }
-// }
-// 
-// #[derive(Debug, Clone)]
-// struct ClientStatus {
-//     current: Arc<ProgressBar>,
-// }
-// 
-// impl Drop for ClientStatus {
-//     fn drop(&mut self) {
-//         if Arc::strong_count(&self.current) == 1 {
-//             self.current.finish_and_clear();
-//         }
-//     }
-// }
+#[derive(Debug, Clone)]
+struct SendStatus {
+    /// the multiprogress bar
+    mp: MultiProgress,
+}
 
-// impl CustomEventSender for ClientStatus {
-//     fn send(&self, event: iroh_blobs::provider::Event) -> Boxed<()> {
-//         self.try_send(event);
-//         Box::pin(std::future::ready(()))
-//     }
+impl SendStatus {
+    fn new() -> Self {
+        let mp = MultiProgress::new();
+        mp.set_draw_target(ProgressDrawTarget::stderr());
+        Self { mp }
+    }
 
-//     fn try_send(&self, event: provider::Event) {
-//         tracing::info!("{:?}", event);
-//         let msg = match event {
-//             provider::Event::ClientConnected { connection_id } => {
-//                 Some(format!("{} got connection", connection_id))
-//             }
-//             provider::Event::TransferBlobCompleted {
-//                 connection_id,
-//                 hash,
-//                 index,
-//                 size,
-//                 ..
-//             } => Some(format!(
-//                 "{} transfer blob completed {} {} {}",
-//                 connection_id,
-//                 hash,
-//                 index,
-//                 HumanBytes(size)
-//             )),
-//             provider::Event::TransferCompleted {
-//                 connection_id,
-//                 stats,
-//                 ..
-//             } => Some(format!(
-//                 "{} transfer completed {} {}",
-//                 connection_id,
-//                 stats.send.write_bytes.size,
-//                 HumanDuration(stats.send.write_bytes.stats.duration)
-//             )),
-//             provider::Event::TransferAborted { connection_id, .. } => {
-//                 Some(format!("{} transfer completed", connection_id))
-//             }
-//             _ => None,
-//         };
-//         if let Some(msg) = msg {
-//             self.current.set_message(msg);
-//         }
-//     }
-// }
+    fn new_client(&self) -> ClientStatus {
+        let current = self.mp.add(ProgressBar::hidden());
+        current.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .unwrap(),
+        );
+        current.enable_steady_tick(Duration::from_millis(100));
+        current.set_message("waiting for requests");
+        ClientStatus {
+            current: current.into(),
+        }
+    }
+}
 
-pub async fn send(args: SendArgs) -> anyhow::Result<()> {
+#[derive(Debug, Clone)]
+struct ClientStatus {
+    current: Arc<ProgressBar>,
+}
+
+impl Drop for ClientStatus {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.current) == 1 {
+            self.current.finish_and_clear();
+        }
+    }
+}
+
+impl CustomEventSender for ClientStatus {
+    fn send(&self, event: iroh_blobs::provider::Event) -> Boxed<()> {
+        self.try_send(event);
+        Box::pin(std::future::ready(()))
+    }
+
+    fn try_send(&self, event: provider::Event) {
+        tracing::info!("{:?}", event);
+        let msg = match event {
+            provider::Event::ClientConnected { connection_id } => {
+                Some(format!("{} got connection", connection_id))
+            }
+            provider::Event::TransferBlobCompleted {
+                connection_id,
+                hash,
+                index,
+                size,
+                ..
+            } => Some(format!(
+                "{} transfer blob completed {} {} {}",
+                connection_id,
+                hash,
+                index,
+                HumanBytes(size)
+            )),
+            provider::Event::TransferCompleted {
+                connection_id,
+                stats,
+                ..
+            } => Some(format!(
+                "{} transfer completed {} {}",
+                connection_id,
+                stats.send.write_bytes.size,
+                HumanDuration(stats.send.write_bytes.stats.duration)
+            )),
+            provider::Event::TransferAborted { connection_id, .. } => {
+                Some(format!("{} transfer completed", connection_id))
+            }
+            _ => None,
+        };
+        if let Some(msg) = msg {
+            self.current.set_message(msg);
+        }
+    }
+}
+
+pub async fn send(
+    args: SendArgs,
+    view_update_sender: Sender<ViewUpdate>,
+    mut cancel_receiver: Receiver<bool>,
+) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(false)?;
     // create a magicsocket endpoint
     let mut builder = Endpoint::builder()
@@ -419,142 +427,147 @@ pub async fn send(args: SendArgs) -> anyhow::Result<()> {
     apply_options(&mut addr, args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
-    // println!(
-    //     "imported {} {}, {}, hash {}",
-    //     entry_type,
-    //     path.display(),
-    //     HumanBytes(size),
-    //     print_hash(&hash, args.common.format)
-    // );
-    println!("to get this data, use");
-    println!("sendme receive {}", ticket);
+    println!(
+        "imported {} {}, {}, hash {}",
+        entry_type,
+        path.display(),
+        HumanBytes(size),
+        print_hash(&hash, args.common.format)
+    );
+    view_update_sender.send(ViewUpdate::Ticket(ticket.clone()))?;
 
     drop(temp_tag);
 
     // Wait for exit
-    tokio::signal::ctrl_c().await?;
+    // tokio::signal::ctrl_c().await?;
+    while cancel_receiver.changed().await.is_ok() {
+        if *cancel_receiver.borrow() {
+            break;
+        }
+    }
 
     println!("shutting down");
     tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
     tokio::fs::remove_dir_all(blobs_data_dir).await?;
+    view_update_sender.send(ViewUpdate::Nothing)?;
 
     Ok(())
 }
-//
-// fn make_download_progress() -> ProgressBar {
-//     let pb = ProgressBar::hidden();
-//     pb.enable_steady_tick(std::time::Duration::from_millis(100));
-//     pb.set_style(
-//         ProgressStyle::with_template(
-//             "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}",
-//         )
-//             .unwrap()
-//             .progress_chars("#>-"),
-//     );
-//     pb
-// }
 
-// pub async fn show_download_progress(
-//     recv: async_channel::Receiver<DownloadProgress>,
-//     total_size: u64,
-// ) -> anyhow::Result<()> {
-//     let mp = MultiProgress::new();
-//     mp.set_draw_target(ProgressDrawTarget::stderr());
-//     let op = mp.add(make_download_progress());
-//     op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
-//     let mut total_done = 0;
-//     let mut sizes = BTreeMap::new();
-//     loop {
-//         let x = recv.recv().await;
-//         match x {
-//             Ok(DownloadProgress::Connected) => {
-//                 op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
-//             }
-//             Ok(DownloadProgress::FoundHashSeq { children, .. }) => {
-//                 op.set_message(format!(
-//                     "{} Downloading {} blob(s)\n",
-//                     style("[3/3]").bold().dim(),
-//                     children + 1,
-//                 ));
-//                 op.set_length(total_size);
-//                 op.reset();
-//             }
-//             Ok(DownloadProgress::Found { id, size, .. }) => {
-//                 sizes.insert(id, size);
-//             }
-//             Ok(DownloadProgress::Progress { offset, .. }) => {
-//                 op.set_position(total_done + offset);
-//             }
-//             Ok(DownloadProgress::Done { id }) => {
-//                 total_done += sizes.remove(&id).unwrap_or_default();
-//             }
-//             Ok(DownloadProgress::AllDone(stats)) => {
-//                 op.finish_and_clear();
-//                 eprintln!(
-//                     "Transferred {} in {}, {}/s",
-//                     HumanBytes(stats.bytes_read),
-//                     HumanDuration(stats.elapsed),
-//                     HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
-//                 );
-//                 break;
-//             }
-//             Ok(DownloadProgress::Abort(e)) => {
-//                 anyhow::bail!("download aborted: {e:?}");
-//             }
-//             Err(e) => {
-//                 anyhow::bail!("error reading progress: {e:?}");
-//             }
-//             _ => {}
-//         }
-//     }
-//     Ok(())
-// }
+fn make_download_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}",
+        )
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb
+}
 
-// fn show_get_error(e: anyhow::Error) -> anyhow::Error {
-//     if let Some(err) = e.downcast_ref::<DecodeError>() {
-//         match err {
-//             DecodeError::NotFound => {
-//                 eprintln!("{}", style("send side no longer has a file").yellow())
-//             }
-//             DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => eprintln!(
-//                 "{}",
-//                 style("send side no longer has part of a file").yellow()
-//             ),
-//             DecodeError::Io(err) => eprintln!(
-//                 "{}",
-//                 style(format!("generic network error: {}", err)).yellow()
-//             ),
-//             DecodeError::Read(err) => eprintln!(
-//                 "{}",
-//                 style(format!("error reading data from quinn: {}", err)).yellow()
-//             ),
-//             DecodeError::LeafHashMismatch(_) | DecodeError::ParentHashMismatch(_) => {
-//                 eprintln!("{}", style("send side sent wrong data").red())
-//             }
-//         };
-//     } else if let Some(header_error) = e.downcast_ref::<AtBlobHeaderNextError>() {
-//         // TODO(iroh-bytes): get_to_db should have a concrete error type so you don't have to guess
-//         match header_error {
-//             AtBlobHeaderNextError::Io(err) => eprintln!(
-//                 "{}",
-//                 style(format!("generic network error: {}", err)).yellow()
-//             ),
-//             AtBlobHeaderNextError::Read(err) => eprintln!(
-//                 "{}",
-//                 style(format!("error reading data from quinn: {}", err)).yellow()
-//             ),
-//             AtBlobHeaderNextError::NotFound => {
-//                 eprintln!("{}", style("send side no longer has a file").yellow())
-//             }
-//         };
-//     } else {
-//         eprintln!(
-//             "{}",
-//             style(format!("generic error: {:?}", e.root_cause())).red()
-//         );
-//     }
-//     e
-// }
+pub async fn show_download_progress(
+    recv: async_channel::Receiver<DownloadProgress>,
+    total_size: u64,
+) -> anyhow::Result<()> {
+    let mp = MultiProgress::new();
+    mp.set_draw_target(ProgressDrawTarget::stderr());
+    let op = mp.add(make_download_progress());
+    op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
+    let mut total_done = 0;
+    let mut sizes = BTreeMap::new();
+    loop {
+        let x = recv.recv().await;
+        match x {
+            Ok(DownloadProgress::Connected) => {
+                op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
+            }
+            Ok(DownloadProgress::FoundHashSeq { children, .. }) => {
+                op.set_message(format!(
+                    "{} Downloading {} blob(s)\n",
+                    style("[3/3]").bold().dim(),
+                    children + 1,
+                ));
+                op.set_length(total_size);
+                op.reset();
+            }
+            Ok(DownloadProgress::Found { id, size, .. }) => {
+                sizes.insert(id, size);
+            }
+            Ok(DownloadProgress::Progress { offset, .. }) => {
+                op.set_position(total_done + offset);
+            }
+            Ok(DownloadProgress::Done { id }) => {
+                total_done += sizes.remove(&id).unwrap_or_default();
+            }
+            Ok(DownloadProgress::AllDone(stats)) => {
+                op.finish_and_clear();
+                eprintln!(
+                    "Transferred {} in {}, {}/s",
+                    HumanBytes(stats.bytes_read),
+                    HumanDuration(stats.elapsed),
+                    HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
+                );
+                break;
+            }
+            Ok(DownloadProgress::Abort(e)) => {
+                anyhow::bail!("download aborted: {e:?}");
+            }
+            Err(e) => {
+                anyhow::bail!("error reading progress: {e:?}");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn show_get_error(e: anyhow::Error) -> anyhow::Error {
+    if let Some(err) = e.downcast_ref::<DecodeError>() {
+        match err {
+            DecodeError::NotFound => {
+                eprintln!("{}", style("send side no longer has a file").yellow())
+            }
+            DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => eprintln!(
+                "{}",
+                style("send side no longer has part of a file").yellow()
+            ),
+            DecodeError::Io(err) => eprintln!(
+                "{}",
+                style(format!("generic network error: {}", err)).yellow()
+            ),
+            DecodeError::Read(err) => eprintln!(
+                "{}",
+                style(format!("error reading data from quinn: {}", err)).yellow()
+            ),
+            DecodeError::LeafHashMismatch(_) | DecodeError::ParentHashMismatch(_) => {
+                eprintln!("{}", style("send side sent wrong data").red())
+            }
+        };
+    } else if let Some(header_error) = e.downcast_ref::<AtBlobHeaderNextError>() {
+        // TODO(iroh-bytes): get_to_db should have a concrete error type so you don't have to guess
+        match header_error {
+            AtBlobHeaderNextError::Io(err) => eprintln!(
+                "{}",
+                style(format!("generic network error: {}", err)).yellow()
+            ),
+            AtBlobHeaderNextError::Read(err) => eprintln!(
+                "{}",
+                style(format!("error reading data from quinn: {}", err)).yellow()
+            ),
+            AtBlobHeaderNextError::NotFound => {
+                eprintln!("{}", style("send side no longer has a file").yellow())
+            }
+        };
+    } else {
+        eprintln!(
+            "{}",
+            style(format!("generic error: {:?}", e.root_cause())).red()
+        );
+    }
+    e
+}
 
 pub async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
@@ -592,9 +605,8 @@ pub async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let (send, recv) = async_channel::bounded(32);
     let progress = iroh_blobs::util::progress::AsyncChannelProgressSender::new(send);
     let (_hash_seq, sizes) =
-        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
-            .await?;
-            // .map_err(show_get_error)?;
+        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32).await?;
+    // .map_err(show_get_error)?;
     let total_size = sizes.iter().sum::<u64>();
     let total_files = sizes.len().saturating_sub(1);
     let payload_size = sizes.iter().skip(1).sum::<u64>();
@@ -605,11 +617,10 @@ pub async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         HumanBytes(payload_size)
     );
     // print the details of the collection only in verbose mode
-    // let _task = tokio::spawn(show_download_progress(recv, total_size));
+    let _task = tokio::spawn(show_download_progress(recv, total_size));
     let get_conn = || async move { Ok(connection) };
-    let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
-        .await?;
-        // .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
+    let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress).await?;
+    // .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
     let collection = Collection::load_db(&db, &hash_and_format.hash).await?;
 
     if let Some((name, _)) = collection.iter().next() {

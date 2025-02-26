@@ -1,13 +1,11 @@
 //! Command line arguments.
-mod view;
 mod backend;
 mod interconnect;
-
-use tokio::runtime::Runtime;
+mod view;
 use crate::view::View;
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // tracing_subscriber::fmt::init();
     let res = eframe::run_native(
         "Send Me View",
         eframe::NativeOptions {
@@ -17,16 +15,7 @@ fn main() -> anyhow::Result<()> {
                 .with_always_on_top(),
             ..Default::default()
         },
-        Box::new(|_| {
-            Ok(Box::new(View {
-                init: true,
-                path: String::new(),
-                ticket: String::new(),
-                sending_handle: None,
-                receiving_handle: None,
-                tokio_runtime: Runtime::new().unwrap(),
-            }))
-        }),
+        Box::new(|_| Ok(Box::new(View::default()))),
     );
     match res {
         Ok(()) => std::process::exit(0),

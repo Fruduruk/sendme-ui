@@ -7,17 +7,12 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-/// Send a file or directory between two machines, using blake3 verified streaming.
-///
-/// For all subcommands, you can specify a secret key using the IROH_SECRET
-/// environment variable. If you don't, a random one will be generated.
-///
-/// You can also specify a port for the magicsocket. If you don't, a random one
-/// will be chosen.
-#[derive(Debug)]
-pub struct Args {
-    pub command: Commands,
+pub enum ViewUpdate {
+    Nothing,
+    Ticket(BlobTicket),
+    Progress
 }
+
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -65,28 +60,24 @@ pub enum Commands {
 
 #[derive(Debug)]
 pub struct CommonArgs {
-    /// The IPv4 address that magicsocket will listen on.
+    /// The IPv4 address that magic socket will listen on.
     ///
     /// If None, defaults to a random free port, but it can be useful to specify a fixed
     /// port, e.g. to configure a firewall rule.
-    // #[clap(long, default_value = None)]
     pub magic_ipv4_addr: Option<SocketAddrV4>,
 
-    /// The IPv6 address that magicsocket will listen on.
+    /// The IPv6 address that magic socket will listen on.
     ///
     /// If None, defaults to a random free port, but it can be useful to specify a fixed
     /// port, e.g. to configure a firewall rule.
-    // #[clap(long, default_value = None)]
     pub magic_ipv6_addr: Option<SocketAddrV6>,
 
-    // #[clap(long, default_value_t = Format::Hex)]
     pub format: Format,
 
     /// The relay URL to use as a home relay,
     ///
     /// Can be set to "disable" to disable relay servers and "default"
     /// to configure default servers.
-    // #[clap(long, default_value_t = RelayModeOption::Default)]
     pub relay: RelayModeOption,
 }
 
@@ -96,7 +87,7 @@ impl Default for CommonArgs {
             relay: RelayModeOption::Default,
             magic_ipv6_addr: None,
             magic_ipv4_addr: None,
-            format : Format::Hex
+            format : Format::default()
         }
     }
 }
@@ -165,7 +156,6 @@ pub struct SendArgs {
     ///
     /// This is most useful for debugging which methods of connection
     /// establishment work well.
-    // #[clap(long, default_value_t = AddrInfoOptions::RelayAndAddresses)]
     pub ticket_type: AddrInfoOptions,
 
     pub common: CommonArgs,
