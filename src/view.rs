@@ -2,11 +2,12 @@ use crate::backend::{receive, send};
 use crate::interconnect::{AddrInfoOptions, CommonArgs, ReceiveArgs, SendArgs, ViewUpdate};
 use arboard::Clipboard;
 use egui::{Context, ProgressBar, Ui};
+use indicatif::{HumanBytes, HumanDuration};
+use iroh_blobs::get::db::DownloadProgress;
 use iroh_blobs::ticket::BlobTicket;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
-use iroh_blobs::get::db::DownloadProgress;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -55,6 +56,7 @@ impl eframe::App for View {
         if self.init {
             self.init(ctx);
         }
+        ctx.request_repaint();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::widgets::global_theme_preference_buttons(ui);
@@ -73,7 +75,7 @@ impl eframe::App for View {
             }
             match self.tab {
                 Tab::Send => {
-                    self.show_send_ui(ui);
+                    self.show_send_ui(ctx,ui);
                 }
                 Tab::Receive => {
                     self.show_receive_ui(ui);
@@ -96,12 +98,25 @@ impl View {
             ViewUpdate::Ticket(ticket) => {
                 Self::show_ticket(ui, ticket);
             }
-            ViewUpdate::Progress((total_done, total_size, progress)) => {
-                if let DownloadProgress::Progress { offset, .. } = progress {
-                    let progress = (*total_done as f32 + *offset as f32) / *total_size as f32;
-                    let bar = ProgressBar::new(progress);
-                    ui.add(bar);
-                }
+            ViewUpdate::Progress(view_progress) => {
+                let progress =
+                    view_progress.progress_value as f32 / view_progress.total_size as f32;
+                let bar = ProgressBar::new(progress);
+                ui.add(bar);
+                ui.label(format!(
+                    "Downloading... {}/{}",
+                    HumanBytes(view_progress.progress_value),
+                    HumanBytes(view_progress.total_size),
+                ));
+            }
+            ViewUpdate::DownloadDone{stats, path} => {
+                ui.label(format!(
+                    "Transferred {} in {}, {}/s",
+                    HumanBytes(stats.bytes_read),
+                    HumanDuration(stats.elapsed),
+                    HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
+                ));
+                ui.label(format!("Saved to {path}"));
             }
         }
     }
@@ -115,7 +130,7 @@ impl View {
         }
     }
 
-    fn show_send_ui(&mut self, ui: &mut Ui) {
+    fn show_send_ui(&mut self,ctx: &Context, ui: &mut Ui) {
         if let Some(handle) = &self.sending_handle {
             if handle.is_finished() {
                 self.sending_handle = None;
@@ -132,6 +147,14 @@ impl View {
             let clean_path = remove_quotes(&self.path);
             self.path = clean_path.into();
 
+            ctx.input(|i| {
+                for file in &i.raw.dropped_files {
+                    if let Some(path) = &file.path {
+                        self.path = path.to_str().unwrap().into();
+                    }
+                }
+            });
+            
             if ui.button("Send").clicked() {
                 self.cancel_sender.send(false).unwrap();
                 let args = SendArgs {

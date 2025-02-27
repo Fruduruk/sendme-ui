@@ -1,5 +1,5 @@
 use crate::interconnect::{
-    apply_options, print_hash, AddrInfoOptions, ReceiveArgs, SendArgs, ViewUpdate,
+    apply_options, print_hash, AddrInfoOptions, ReceiveArgs, SendArgs, ViewProgress, ViewUpdate,
 };
 use anyhow::Context;
 use clap::{
@@ -32,6 +32,7 @@ use iroh_blobs::{
 use n0_future::{future::Boxed, StreamExt};
 use rand::{random, Rng};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::{
     collections::BTreeMap,
     fmt::{Display, Formatter},
@@ -41,7 +42,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::ops::Deref;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{Receiver, Sender};
 use walkdir::WalkDir;
@@ -285,14 +285,14 @@ async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> an
 //     /// the multiprogress bar
 //     mp: MultiProgress,
 // }
-// 
+//
 // impl SendStatus {
 //     fn new() -> Self {
 //         let mp = MultiProgress::new();
 //         mp.set_draw_target(ProgressDrawTarget::stderr());
 //         Self { mp }
 //     }
-// 
+//
 //     fn new_client(&self) -> ClientStatus {
 //         let current = self.mp.add(ProgressBar::hidden());
 //         current.set_style(
@@ -312,7 +312,7 @@ async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> an
 // struct ClientStatus {
 //     current: Arc<ProgressBar>,
 // }
-// 
+//
 // impl Drop for ClientStatus {
 //     fn drop(&mut self) {
 //         if Arc::strong_count(&self.current) == 1 {
@@ -320,13 +320,13 @@ async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> an
 //         }
 //     }
 // }
-// 
+//
 // impl CustomEventSender for ClientStatus {
 //     fn send(&self, event: iroh_blobs::provider::Event) -> Boxed<()> {
 //         self.try_send(event);
 //         Box::pin(std::future::ready(()))
 //     }
-// 
+//
 //     fn try_send(&self, event: provider::Event) {
 //         tracing::info!("{:?}", event);
 //         let msg = match event {
@@ -453,66 +453,52 @@ pub async fn send(
 
     Ok(())
 }
-
-fn make_download_progress() -> ProgressBar {
-    let pb = ProgressBar::hidden();
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}",
-        )
-            .unwrap()
-            .progress_chars("#>-"),
-    );
-    pb
-}
-
 pub async fn show_download_progress(
     recv: async_channel::Receiver<DownloadProgress>,
     total_size: u64,
+    payload_size: u64,
+    total_files: usize,
     view_update_sender: Sender<ViewUpdate>,
 ) -> anyhow::Result<()> {
-    let mp = MultiProgress::new();
-    mp.set_draw_target(ProgressDrawTarget::stderr());
-    let op = mp.add(make_download_progress());
-    op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
     let mut total_done = 0;
     let mut sizes = BTreeMap::new();
+    let mut current_progress = ViewProgress {
+        total_size,
+        payload_size,
+        total_files,
+        progress_value: 0,
+    };
     loop {
-        let x = recv.recv().await;
-        if let Ok(progress) = x.clone() {
-            view_update_sender.send(ViewUpdate::Progress((total_done,total_size,progress)))?;
-        }
-        match x {
+        view_update_sender.send(ViewUpdate::Progress(current_progress.clone()))?;
+        match recv.recv().await {
             Ok(DownloadProgress::Connected) => {
-                op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
+                // op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
             }
             Ok(DownloadProgress::FoundHashSeq { children, .. }) => {
-                op.set_message(format!(
-                    "{} Downloading {} blob(s)\n",
-                    style("[3/3]").bold().dim(),
-                    children + 1,
-                ));
-                op.set_length(total_size);
-                op.reset();
+                // op.set_message(format!(
+                //     "{} Downloading {} blob(s)\n",
+                //     style("[3/3]").bold().dim(),
+                //     children + 1,
+                // ));
+                // op.set_length(total_size);
+                // op.reset();
             }
             Ok(DownloadProgress::Found { id, size, .. }) => {
                 sizes.insert(id, size);
             }
             Ok(DownloadProgress::Progress { offset, .. }) => {
-                op.set_position(total_done + offset);
+                current_progress.progress_value = total_done + offset;
             }
             Ok(DownloadProgress::Done { id }) => {
                 total_done += sizes.remove(&id).unwrap_or_default();
             }
             Ok(DownloadProgress::AllDone(stats)) => {
-                op.finish_and_clear();
-                eprintln!(
-                    "Transferred {} in {}, {}/s",
-                    HumanBytes(stats.bytes_read),
-                    HumanDuration(stats.elapsed),
-                    HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
-                );
+                // eprintln!(
+                //     "Transferred {} in {}, {}/s",
+                //     HumanBytes(stats.bytes_read),
+                //     HumanDuration(stats.elapsed),
+                //     HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
+                // );
                 break;
             }
             Ok(DownloadProgress::Abort(e)) => {
@@ -573,7 +559,10 @@ pub async fn show_download_progress(
 //     e
 // }
 
-pub async fn receive(args: ReceiveArgs, view_update_sender: Sender<ViewUpdate>) -> anyhow::Result<()> {
+pub async fn receive(
+    args: ReceiveArgs,
+    view_update_sender: Sender<ViewUpdate>,
+) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(false)?;
@@ -614,22 +603,36 @@ pub async fn receive(args: ReceiveArgs, view_update_sender: Sender<ViewUpdate>) 
     let total_size = sizes.iter().sum::<u64>();
     let total_files = sizes.len().saturating_sub(1);
     let payload_size = sizes.iter().skip(1).sum::<u64>();
-    eprintln!(
-        "getting collection {} {} files, {}",
-        print_hash(&ticket.hash(), args.common.format),
-        total_files,
-        HumanBytes(payload_size)
-    );
+    // eprintln!(
+    //     "getting collection {} {} files, {}",
+    //     print_hash(&ticket.hash(), args.common.format),
+    //     total_files,
+    //     HumanBytes(payload_size)
+    // );
     // print the details of the collection only in verbose mode
-    let _task = tokio::spawn(show_download_progress(recv, total_size,view_update_sender));
+    let _task = tokio::spawn(show_download_progress(
+        recv,
+        total_size,
+        payload_size,
+        total_files,
+        view_update_sender.clone(),
+    ));
     let get_conn = || async move { Ok(connection) };
     let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress).await?;
+    view_update_sender.send(ViewUpdate::DownloadDone {
+        stats: stats.clone(),
+        path: String::new(),
+    })?;
     // .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
+
     let collection = Collection::load_db(&db, &hash_and_format.hash).await?;
 
     if let Some((name, _)) = collection.iter().next() {
         if let Some(first) = name.split('/').next() {
-            println!("downloading to: {};", first);
+            view_update_sender.send(ViewUpdate::DownloadDone {
+                stats,
+                path: first.to_string(),
+            })?;
         }
     }
     export(db, collection).await?;

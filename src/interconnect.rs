@@ -6,14 +6,26 @@ use std::fmt::{Display, Formatter};
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::path::PathBuf;
 use std::str::FromStr;
-use iroh_blobs::get::db::DownloadProgress;
+use iroh_blobs::get::Stats;
 
+#[derive(Debug, Clone)]
 pub enum ViewUpdate {
     Nothing,
     Ticket(BlobTicket),
-    Progress((u64,u64,DownloadProgress))
+    Progress(ViewProgress),
+    DownloadDone{
+        stats: Stats,
+        path: String
+    }
 }
 
+#[derive(Debug, Clone)]
+pub struct ViewProgress {
+    pub total_size: u64,
+    pub payload_size: u64,
+    pub total_files: usize,
+    pub progress_value: u64,
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -88,7 +100,7 @@ impl Default for CommonArgs {
             relay: RelayModeOption::Default,
             magic_ipv6_addr: None,
             magic_ipv4_addr: None,
-            format : Format::default()
+            format: Format::default(),
         }
     }
 }
