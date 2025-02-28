@@ -22,9 +22,9 @@ pub enum ViewUpdate {
 #[derive(Debug, Clone)]
 pub struct ViewProgress {
     pub total_size: u64,
-    pub payload_size: u64,
     pub total_files: usize,
     pub progress_value: u64,
+    pub bytes_per_second: u64
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

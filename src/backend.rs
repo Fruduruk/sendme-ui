@@ -42,6 +42,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use std::time::Instant;
+use console::TermTarget::Stderr;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{Receiver, Sender};
 use walkdir::WalkDir;
@@ -456,49 +458,40 @@ pub async fn send(
 pub async fn show_download_progress(
     recv: async_channel::Receiver<DownloadProgress>,
     total_size: u64,
-    payload_size: u64,
     total_files: usize,
     view_update_sender: Sender<ViewUpdate>,
 ) -> anyhow::Result<()> {
     let mut total_done = 0;
     let mut sizes = BTreeMap::new();
-    let mut current_progress = ViewProgress {
-        total_size,
-        payload_size,
-        total_files,
-        progress_value: 0,
-    };
+    let mut last_time = Instant::now();
+    let mut last_progress = 0;
+    let mut speed = 0.0;
     loop {
-        view_update_sender.send(ViewUpdate::Progress(current_progress.clone()))?;
         match recv.recv().await {
-            Ok(DownloadProgress::Connected) => {
-                // op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
-            }
-            Ok(DownloadProgress::FoundHashSeq { children, .. }) => {
-                // op.set_message(format!(
-                //     "{} Downloading {} blob(s)\n",
-                //     style("[3/3]").bold().dim(),
-                //     children + 1,
-                // ));
-                // op.set_length(total_size);
-                // op.reset();
-            }
             Ok(DownloadProgress::Found { id, size, .. }) => {
                 sizes.insert(id, size);
             }
             Ok(DownloadProgress::Progress { offset, .. }) => {
-                current_progress.progress_value = total_done + offset;
+                let progress = total_done + offset;
+                if last_time.elapsed().as_millis() > 1000 {
+                    let elapsed = last_time.elapsed();
+                    let progress_difference = progress.saturating_sub(last_progress);
+                    speed = progress_difference as f64 / elapsed.as_secs_f64();
+                    last_progress = progress;
+                    last_time = Instant::now();
+                }
+
+                view_update_sender.send(ViewUpdate::Progress(ViewProgress {
+                    total_size,
+                    bytes_per_second: speed as u64,
+                    total_files,
+                    progress_value: progress,
+                }))?;
             }
             Ok(DownloadProgress::Done { id }) => {
                 total_done += sizes.remove(&id).unwrap_or_default();
             }
-            Ok(DownloadProgress::AllDone(stats)) => {
-                // eprintln!(
-                //     "Transferred {} in {}, {}/s",
-                //     HumanBytes(stats.bytes_read),
-                //     HumanDuration(stats.elapsed),
-                //     HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
-                // );
+            Ok(DownloadProgress::AllDone(_)) => {
                 break;
             }
             Ok(DownloadProgress::Abort(e)) => {
@@ -602,7 +595,7 @@ pub async fn receive(
     // .map_err(show_get_error)?;
     let total_size = sizes.iter().sum::<u64>();
     let total_files = sizes.len().saturating_sub(1);
-    let payload_size = sizes.iter().skip(1).sum::<u64>();
+    // let payload_size = sizes.iter().skip(1).sum::<u64>();
     // eprintln!(
     //     "getting collection {} {} files, {}",
     //     print_hash(&ticket.hash(), args.common.format),
@@ -613,7 +606,6 @@ pub async fn receive(
     let _task = tokio::spawn(show_download_progress(
         recv,
         total_size,
-        payload_size,
         total_files,
         view_update_sender.clone(),
     ));
