@@ -7,6 +7,7 @@ use clap::{
     CommandFactory, Parser, Subcommand,
 };
 use console::style;
+use console::TermTarget::Stderr;
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -33,6 +34,7 @@ use n0_future::{future::Boxed, StreamExt};
 use rand::{random, Rng};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+use std::time::Instant;
 use std::{
     collections::BTreeMap,
     fmt::{Display, Formatter},
@@ -42,8 +44,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use std::time::Instant;
-use console::TermTarget::Stderr;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{Receiver, Sender};
 use walkdir::WalkDir;
@@ -260,7 +260,14 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
 }
 
 async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> anyhow::Result<()> {
-    let root = std::env::current_dir()?;
+    let mut root = std::env::current_dir()?;
+    let path = rfd::AsyncFileDialog::new()
+        .set_title("Save to...")
+        .save_file().await;
+    if let Some(handle) = path {
+        root = handle.path().to_path_buf();
+    }
+
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
         if target.exists() {

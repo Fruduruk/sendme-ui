@@ -19,6 +19,7 @@ eframe = { version = "0.29", default-features = false, features = [
     "glow",          # Use the glow rendering backend. Alternative: "wgpu".
     "persistence",   # Enable restoring app state when restarting the app.
 ] }
+rfd = "0.15.2"
 anyhow = "1.0.75"
 async-channel = "2.3.1"
 clap = { version = "4.4.10", features = ["derive"] }

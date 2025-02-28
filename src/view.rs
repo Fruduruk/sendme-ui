@@ -30,8 +30,6 @@ pub struct View {
     sender: Sender<ViewUpdate>,
     cancel_sender: Sender<bool>,
     cancel_receiver: Receiver<bool>,
-    instant: Instant,
-    bytes_per_second: u64
 }
 
 impl Default for View {
@@ -50,8 +48,6 @@ impl Default for View {
             receiver,
             cancel_sender,
             cancel_receiver,
-            instant : Instant::now(),
-            bytes_per_second : 0
         }
     }
 }
@@ -109,15 +105,11 @@ impl View {
                 let bar = ProgressBar::new(progress);
                 ui.add(bar);
                 ui.label(format!(
-                    "Downloading... {}/{} {}/s",
+                    "Downloading... {}/{}  {}/s",
                     HumanBytes(view_progress.progress_value),
                     HumanBytes(view_progress.total_size),
-                    HumanBytes(self.bytes_per_second)
+                    HumanBytes(view_progress.bytes_per_second)
                 ));
-                if self.instant.elapsed().as_millis() > 1000 {
-                    self.bytes_per_second = view_progress.bytes_per_second;
-                    self.instant = Instant::now();
-                }
             }
             ViewUpdate::DownloadDone{stats, path} => {
                 ui.label(format!(
