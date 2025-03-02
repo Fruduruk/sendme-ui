@@ -44,6 +44,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use rfd::FileHandle;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{Receiver, Sender};
 use walkdir::WalkDir;
@@ -259,14 +260,9 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> anyhow::Result<()> {
+async fn export(db: impl iroh_blobs::store::Store, file_handle: FileHandle, collection: Collection) -> anyhow::Result<()> {
     let mut root = std::env::current_dir()?;
-    let path = rfd::AsyncFileDialog::new()
-        .set_title("Save to...")
-        .save_file().await;
-    if let Some(handle) = path {
-        root = handle.path().to_path_buf();
-    }
+    root = file_handle.path().to_path_buf();
 
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
@@ -284,7 +280,7 @@ async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> an
             ExportMode::TryReference,
             Box::new(move |_position| Ok(())),
         )
-        .await?;
+            .await?;
     }
     Ok(())
 }
@@ -616,6 +612,9 @@ pub async fn receive(
         total_files,
         view_update_sender.clone(),
     ));
+    let path_task = rfd::AsyncFileDialog::new()
+        .set_title("Save to...")
+        .save_file();
     let get_conn = || async move { Ok(connection) };
     let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress).await?;
     view_update_sender.send(ViewUpdate::DownloadDone {
@@ -634,7 +633,8 @@ pub async fn receive(
             })?;
         }
     }
-    export(db, collection).await?;
+    let path = path_task.await;
+    export(db, path.unwrap(), collection).await?;
     tokio::fs::remove_dir_all(iroh_data_dir).await?;
 
     Ok(())

@@ -1,11 +1,10 @@
-//! Command line arguments.
+#![windows_subsystem = "windows"]
 mod backend;
 mod interconnect;
 mod view;
 use crate::view::View;
 
 fn main() -> anyhow::Result<()> {
-    // tracing_subscriber::fmt::init();
     let res = eframe::run_native(
         "Send Me View",
         eframe::NativeOptions {
