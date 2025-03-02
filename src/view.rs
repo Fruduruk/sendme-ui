@@ -3,7 +3,6 @@ use crate::interconnect::{AddrInfoOptions, CommonArgs, ReceiveArgs, SendArgs, Vi
 use arboard::Clipboard;
 use egui::{Context, ProgressBar, Ui};
 use indicatif::{HumanBytes, HumanDuration};
-use iroh_blobs::get::db::DownloadProgress;
 use iroh_blobs::ticket::BlobTicket;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -11,7 +10,6 @@ use std::str::FromStr;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 
 enum Tab {
     Send,

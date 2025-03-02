@@ -2,12 +2,7 @@ use crate::interconnect::{
     apply_options, print_hash, AddrInfoOptions, ReceiveArgs, SendArgs, ViewProgress, ViewUpdate,
 };
 use anyhow::Context;
-use clap::{
-    error::{ContextKind, ErrorKind},
-    CommandFactory, Parser, Subcommand,
-};
 use console::style;
-use console::TermTarget::Stderr;
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -45,7 +40,6 @@ use std::{
     time::Duration,
 };
 use rfd::FileHandle;
-use tokio::runtime::Runtime;
 use tokio::sync::watch::{Receiver, Sender};
 use walkdir::WalkDir;
 
@@ -73,15 +67,15 @@ fn validate_path_component(component: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// This function converts an already canonicalized path to a string.
+/// This function converts an already canonical path to a string.
 ///
 /// If `must_be_relative` is true, the function will fail if any component of the path is
 /// `Component::RootDir`
 ///
-/// This function will also fail if the path is non canonical, i.e. contains
+/// This function will also fail if the path is non-canonical, i.e. contains
 /// `..` or `.`, or if the path components contain any windows or unix path
 /// separators.
-pub fn canonicalized_path_to_string(
+pub fn canonical_path_to_string(
     path: impl AsRef<Path>,
     must_be_relative: bool,
 ) -> anyhow::Result<String> {
@@ -207,7 +201,7 @@ async fn import(
             }
             let path = entry.into_path();
             let relative = path.strip_prefix(root)?;
-            let name = canonicalized_path_to_string(relative, true)?;
+            let name = canonical_path_to_string(relative, true)?;
             anyhow::Ok(Some((name, path)))
         })
         .filter_map(Result::transpose)
