@@ -1,4 +1,3 @@
-use crate::backend::{receive, send};
 use crate::interconnect::{AddrInfoOptions, CommonArgs, ReceiveArgs, SendArgs, ViewUpdate};
 use arboard::Clipboard;
 use egui::{Context, ProgressBar, Ui};
@@ -10,6 +9,8 @@ use std::str::FromStr;
 use tokio::runtime::Runtime;
 use tokio::sync::watch::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
+use crate::backend::receive::receive;
+use crate::backend::send::send;
 
 enum Tab {
     Send,

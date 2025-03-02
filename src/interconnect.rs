@@ -55,12 +55,6 @@ impl Display for Format {
     }
 }
 
-pub fn print_hash(hash: &Hash, format: Format) -> String {
-    match format {
-        Format::Hex => hash.to_hex().to_string(),
-        Format::Cid => hash.to_string(),
-    }
-}
 
 #[derive(Debug)]
 pub enum Commands {
@@ -209,20 +203,4 @@ pub enum AddrInfoOptions {
     Addresses,
 }
 
-pub fn apply_options(addr: &mut NodeAddr, opts: AddrInfoOptions) {
-    match opts {
-        AddrInfoOptions::Id => {
-            addr.direct_addresses.clear();
-            addr.relay_url = None;
-        }
-        AddrInfoOptions::RelayAndAddresses => {
-            // nothing to do
-        }
-        AddrInfoOptions::Relay => {
-            addr.direct_addresses.clear();
-        }
-        AddrInfoOptions::Addresses => {
-            addr.relay_url = None;
-        }
-    }
-}
+
