@@ -15,16 +15,16 @@ use iroh::{
 use iroh_blobs::{
     format::collection::Collection,
     net_protocol::Blobs,
-    provider::{ CustomEventSender},
+    provider::CustomEventSender,
     store::{ ImportMode, ImportProgress},
     ticket::BlobTicket,
-    BlobFormat,TempTag,
+    BlobFormat, TempTag,
 };
 use n0_future::{StreamExt};
-use rand::{random, Rng};
+use rand::random;
 use std::{
     collections::BTreeMap,
-    fmt::{Display},
+    fmt::Display,
     path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,

@@ -1,48 +1,23 @@
-use crate::interconnect::{
-    AddrInfoOptions, ReceiveArgs, SendArgs, ViewProgress, ViewUpdate,
-};
-use anyhow::Context;
-use console::style;
-use data_encoding::HEXLOWER;
-use futures_buffered::BufferedStreamExt;
-use indicatif::{
-    HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
-};
-use iroh::{
-    discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
-    Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
-};
+use crate::backend::get_or_create_secret;
+use crate::interconnect::{ReceiveArgs, ViewProgress, ViewUpdate};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use iroh::{discovery::dns::DnsDiscovery, Endpoint};
 use iroh_blobs::{
     format::collection::Collection,
-    get::{
-        db::DownloadProgress,
-        fsm::{AtBlobHeaderNextError, DecodeError},
-        request::get_hash_seq_and_sizes,
-    },
-    net_protocol::Blobs,
-    provider::{self, CustomEventSender},
-    store::{ExportMode, ImportMode, ImportProgress},
-    ticket::BlobTicket,
-    BlobFormat, Hash, HashAndFormat, TempTag,
+    get::{db::DownloadProgress, request::get_hash_seq_and_sizes},
+    provider::CustomEventSender,
+    store::ExportMode,
+    Hash, HashAndFormat,
 };
-use n0_future::{future::Boxed, StreamExt};
-use rand::{random, Rng};
-use serde::{Deserialize, Serialize};
-use std::ops::Deref;
+use rfd::FileHandle;
 use std::time::Instant;
 use std::{
     collections::BTreeMap,
-    fmt::{Display, Formatter},
-    net::{SocketAddrV4, SocketAddrV6},
-    path::{Component, Path, PathBuf},
+    fmt::Display,
+    path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
-    time::Duration,
 };
-use rfd::FileHandle;
-use tokio::sync::watch::{Receiver, Sender};
-use walkdir::WalkDir;
-use crate::backend::get_or_create_secret;
+use tokio::sync::watch::Sender;
 
 pub async fn receive(
     args: ReceiveArgs,
@@ -87,23 +62,13 @@ pub async fn receive(
     // .map_err(show_get_error)?;
     let total_size = sizes.iter().sum::<u64>();
     let total_files = sizes.len().saturating_sub(1);
-    // let payload_size = sizes.iter().skip(1).sum::<u64>();
-    // eprintln!(
-    //     "getting collection {} {} files, {}",
-    //     print_hash(&ticket.hash(), args.common.format),
-    //     total_files,
-    //     HumanBytes(payload_size)
-    // );
-    // print the details of the collection only in verbose mode
     let _task = tokio::spawn(show_download_progress(
         recv,
         total_size,
         total_files,
         view_update_sender.clone(),
     ));
-    let path_task = rfd::AsyncFileDialog::new()
-        .set_title("Save to...")
-        .save_file();
+
     let get_conn = || async move { Ok(connection) };
     let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress).await?;
     view_update_sender.send(ViewUpdate::DownloadDone {
@@ -122,13 +87,12 @@ pub async fn receive(
             })?;
         }
     }
-    let path = path_task.await;
-    export(db, path.unwrap(), collection).await?;
+
+    export(db, collection).await?;
     tokio::fs::remove_dir_all(iroh_data_dir).await?;
 
     Ok(())
 }
-
 
 pub async fn show_download_progress(
     recv: async_channel::Receiver<DownloadProgress>,
@@ -181,31 +145,79 @@ pub async fn show_download_progress(
     Ok(())
 }
 
-async fn export(db: impl iroh_blobs::store::Store, file_handle: FileHandle, collection: Collection) -> anyhow::Result<()> {
-    let mut root = std::env::current_dir()?;
-    root = file_handle.path().to_path_buf();
-
-    for (name, hash) in collection.iter() {
-        let target = get_export_path(&root, name)?;
-        if target.exists() {
-            eprintln!(
-                "target {} already exists. Export stopped.",
-                target.display()
-            );
-            eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
-            anyhow::bail!("target {} already exists", target.display());
+async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> anyhow::Result<()> {
+    if is_one_file(&collection) {
+        let target = get_file_target(&collection).await?;
+        let (_, hash) = collection.iter().next().unwrap();
+        export_to_target(&db, hash, target).await?;
+    } else {
+        let root = get_folder_root().await?;
+        for (name, hash) in collection.iter() {
+            let target = get_export_path(&root, name)?;
+            export_to_target(&db, hash, target).await?;
         }
-        db.export(
-            *hash,
-            target,
-            ExportMode::TryReference,
-            Box::new(move |_position| Ok(())),
-        )
-            .await?;
     }
+
     Ok(())
 }
 
+async fn export_to_target(
+    db: &impl iroh_blobs::store::Store,
+    hash: &Hash,
+    target: PathBuf,
+) -> anyhow::Result<()> {
+    if target.exists() {
+        eprintln!(
+            "target {} already exists. Export stopped.",
+            target.display()
+        );
+        eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
+        anyhow::bail!("target {} already exists", target.display());
+    }
+    db.export(
+        *hash,
+        target,
+        ExportMode::TryReference,
+        Box::new(move |_position| Ok(())),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn get_folder_root() -> anyhow::Result<PathBuf> {
+    let root = std::env::current_dir()?;
+    let file_option = rfd::AsyncFileDialog::new()
+        .set_directory(root.as_path())
+        .set_title("Save to...")
+        .pick_folder()
+        .await;
+
+    if let Some(handle) = file_option {
+        Ok(handle.path().to_path_buf())
+    } else {
+        Ok(root)
+    }
+}
+
+async fn get_file_target(collection: &Collection) -> anyhow::Result<PathBuf> {
+    let root = std::env::current_dir()?;
+    let (name, _) = collection.iter().next().unwrap();
+    let file_option = rfd::AsyncFileDialog::new()
+        .set_file_name(name)
+        .set_directory(root.as_path())
+        .set_title("Save to...")
+        .save_file()
+        .await;
+    if let Some(handle) = file_option {
+        Ok(handle.path().to_path_buf())
+    } else {
+        get_export_path(&root, name)
+    }
+}
+
+fn is_one_file(collection: &Collection) -> bool {
+    collection.len() > 0 && collection.len() == 1
+}
 
 fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let parts = name.split('/');
